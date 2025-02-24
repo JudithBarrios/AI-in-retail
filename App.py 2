@@ -1,0 +1,37 @@
+import logging
+
+logger = logging.getLogger(__name__)
+
+def generate_product_description(product_name: str, keywords: list, tone: str = "neutral") -> str:
+    """
+    Generate a product description using a template-based approach
+    """
+    try:
+        # Convert tone to appropriate adjectives
+        tone_adjectives = {
+            "neutral": "reliable",
+            "professional": "premium",
+            "casual": "easy-going",
+            "luxury": "exclusive",
+            "technical": "advanced",
+            "friendly": "delightful"
+        }
+
+        tone_adj = tone_adjectives.get(tone, "excellent")
+        keywords_text = ", ".join(keywords)
+
+        # Template-based description generation
+        description = f"""Introducing our {tone_adj} {product_name} - a perfect blend of {keywords_text}. 
+        This {product_name} has been carefully designed to meet your needs, incorporating all the features 
+        you're looking for. Each aspect of this product reflects our commitment to quality and innovation, 
+        ensuring you get the best experience possible.
+
+        Featuring {keywords_text}, this {product_name} stands out from the competition. Whether you're 
+        looking for performance, style, or reliability, this product delivers on all fronts.
+        """
+
+        return description.strip()
+
+    except Exception as e:
+        logger.error(f"Error in generate_product_description: {str(e)}")
+        raise Exception("Failed to generate description")
