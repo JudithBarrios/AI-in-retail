@@ -1,0 +1,168 @@
+from flask import Flask, render_template, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
+import os
+import openai
+from dotenv import load_dotenv
+from sqlalchemy import URL
+
+load_dotenv()
+
+app = Flask(__name__, template_folder='templates')
+app.debug = True  # Enable debug mode for better error reporting
+
+# Configure database using separate environment variables
+app.config['SQLALCHEMY_DATABASE_URI'] = URL.create(
+    "postgresql",
+    username=os.getenv('PGUSER'),
+    password=os.getenv('PGPASSWORD'),
+    host=os.getenv('PGHOST'),
+    port=int(os.getenv('PGPORT', '5432')),  # Convert port to integer
+    database=os.getenv('PGDATABASE')
+)
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ECHO'] = True  # Enable SQL query logging
+
+try:
+    db = SQLAlchemy(app)
+    with app.app_context():
+        db.create_all()
+        print("Database tables created successfully")
+except Exception as e:
+    print(f"Error initializing database: {str(e)}")
+    raise
+
+# Model definition
+class Product(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    category = db.Column(db.String(100), nullable=False)
+    features = db.Column(db.ARRAY(db.String), nullable=False)
+    target_audience = db.Column(db.String(200), nullable=False)
+    tone = db.Column(db.String(100), nullable=False)
+    generated_description = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+# Initialize OpenAI client
+openai.api_key = os.getenv('OPENAI_API_KEY')
+if not openai.api_key:
+    raise ValueError("OPENAI_API_KEY environment variable is required")
+
+def generate_description(name, category, features, target_audience, tone):
+    print(f"Generating description for {name}")  # Debug log
+    prompt = f"""Generate a compelling product description with the following details:
+Product Name: {name}
+Category: {category}
+Key Features: {', '.join(features)}
+Target Audience: {target_audience}
+Tone: {tone}
+
+Please create a persuasive and engaging product description that highlights the features and benefits while maintaining the specified tone. The description should be concise yet comprehensive."""
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4o",  # the newest OpenAI model is "gpt-4o" which was released May 13, 2024
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500,
+        )
+        return response.choices[0].message.content
+    except openai.RateLimitError:
+        error_msg = "OpenAI API rate limit exceeded. Please try again later."
+        print(f"OpenAI API error: {error_msg}")  # Debug log
+        raise ValueError(error_msg)
+    except Exception as e:
+        print(f"OpenAI API error: {str(e)}")  # Debug log
+        raise ValueError("Failed to generate description: " + str(e))
+
+@app.route('/', methods=['GET'])
+def index():
+    print("Accessing index route")  # Debug log
+    products = Product.query.order_by(Product.created_at.desc()).all()
+    return render_template('index.html', products=products)
+
+@app.route('/api/products', methods=['POST'])
+def create_product():
+    print("Accessing create_product route")  # Debug log
+    try:
+        data = request.json
+        print(f"Received data: {data}")  # Debug log
+
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+
+        # Validate required fields
+        required_fields = ['name', 'category', 'features', 'targetAudience', 'tone']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            error_msg = f'Missing required fields: {", ".join(missing_fields)}'
+            print(f"Validation error: {error_msg}")  # Debug log
+            return jsonify({'error': error_msg}), 400
+
+        features = data.get('features', [])
+        if not isinstance(features, list):
+            error_msg = 'Features must be an array'
+            print(f"Validation error: {error_msg}")  # Debug log
+            return jsonify({'error': error_msg}), 400
+
+        try:
+            description = generate_description(
+                data['name'],
+                data['category'],
+                features,
+                data['targetAudience'],
+                data['tone']
+            )
+        except ValueError as e:
+            print(f"Description generation error: {str(e)}")  # Debug log
+            return jsonify({'error': str(e)}), 429
+        except Exception as e:
+            print(f"Error generating description: {str(e)}")  # Debug log
+            return jsonify({'error': 'Failed to generate description'}), 500
+
+        product = Product(
+            name=data['name'],
+            category=data['category'],
+            features=features,
+            target_audience=data['targetAudience'],
+            tone=data['tone'],
+            generated_description=description
+        )
+
+        try:
+            db.session.add(product)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            print(f"Database error: {str(e)}")  # Debug log
+            return jsonify({'error': 'Failed to save product'}), 500
+
+        return jsonify({
+            'id': product.id,
+            'name': product.name,
+            'category': product.category,
+            'features': product.features,
+            'targetAudience': product.target_audience,
+            'tone': product.tone,
+            'generatedDescription': product.generated_description,
+            'createdAt': product.created_at.isoformat()
+        })
+    except Exception as e:
+        print(f"Error in create_product: {str(e)}")  # Debug log
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/products', methods=['GET'])
+def get_products():
+    print("Accessing get_products route")  # Debug log
+    products = Product.query.order_by(Product.created_at.desc()).all()
+    return jsonify([{
+        'id': p.id,
+        'name': p.name,
+        'category': p.category,
+        'features': p.features,
+        'targetAudience': p.target_audience,
+        'tone': p.tone,
+        'generatedDescription': p.generated_description,
+        'createdAt': p.created_at.isoformat()
+    } for p in products])
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
